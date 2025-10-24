@@ -89,10 +89,29 @@ def ecouter_annonces_et_postuler(r: redis.Redis):
                 }
                 r.publish(CHAN_CANDIDATURES, json.dumps(candidature))
                 print(f"[{COURIER_ID}] 📨 Candidature envoyée: {candidature}", flush=True)
+
+                # Enregistrer les gains du livreur après l'affectation
+                enregistrer_gain_livreur(r, COURIER_ID, reward)
+
+                # Afficher les gains du livreur
+                afficher_gains_livreur(r, COURIER_ID)
+
             else:
                 print(f"[{COURIER_ID}] ❌ Rejetée par le livreur.", flush=True)
     finally:
         p.close()
+
+
+def enregistrer_gain_livreur(r, courier_id, reward_eur):
+    """Enregistre les gains du livreur dans Redis."""
+    r.hincrbyfloat(f"courier:{courier_id}:gains", "total", reward_eur)
+    print(f"[LIVREUR] ✅ Gain ajouté pour {courier_id}: {reward_eur} €")
+
+
+def afficher_gains_livreur(r, courier_id):
+    """Affiche les gains du livreur."""
+    total_gains = r.hget(f"courier:{courier_id}:gains", "total")
+    print(f"[LIVREUR] 💰 Gains totaux pour {courier_id}: {total_gains} €")
 
 
 def main():

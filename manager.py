@@ -18,7 +18,9 @@ MAX_REWARD = float(os.getenv("MAX_REWARD_EUR", "10.0"))
 AUTO_APPROVE = os.getenv("AUTO_APPROVE", "1") == "1"  # sinon, poserait une question (non interactif ici)
 
 def get_redis():
-    r = redis.Redis.from_url(REDIS_URL, decode_responses=True); r.ping(); return r
+    r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+    r.ping()
+    return r
 
 def _pickup_display(r, restaurant_key):
     h = r.hgetall(restaurant_key)
@@ -44,7 +46,8 @@ def publier_annonce(r, order_id, pickup, dropoff, reward_eur, details_extra=None
     print(f"[MANAGER] 📣 Annonce publiée: {annonce}")
 
 def collecter_candidatures(r, order_id, timeout_s=30):
-    p = r.pubsub(); p.subscribe(CHAN_CANDIDATURES)
+    p = r.pubsub()
+    p.subscribe(CHAN_CANDIDATURES)
     print(f"[MANAGER] ⏳ Attente candidatures ({timeout_s}s) pour {order_id}…")
     pool, deadline = [], time.time()+timeout_s
     try:
@@ -54,7 +57,8 @@ def collecter_candidatures(r, order_id, timeout_s=30):
             try: c = json.loads(msg["data"])
             except Exception: continue
             if c.get("order_id") != order_id: continue
-            pool.append(c); print(f"[MANAGER] ➕ Candidature: {c}")
+            pool.append(c)
+            print(f"[MANAGER] ➕ Candidature: {c}")
     finally:
         p.close()
     print(f"[MANAGER] 🧮 Total candidatures: {len(pool)}")
@@ -111,12 +115,68 @@ def handle_commande(r, cmd):
                     details_extra={"dish": dish, "client_id": client_id, "order_request_id": rid})
 
     cands = collecter_candidatures(r, order_id, timeout_s=30)
-    choisir_et_affecter(r, order_id, cands)
+    affectation = choisir_et_affecter(r, order_id, cands)
+
+    # Enregistrement de la commande traitée pour la facturation
+    if affectation:
+        courier_id = affectation.get("courier_id")
+        enregistrer_commande(r, order_id, restokey, courier_id, reward)
+
+def enregistrer_commande(r, order_id, restaurant_key, courier_id, reward_eur):
+    """Enregistre la commande traitée pour le suivi des gains."""
+    r.hset(f"order:{order_id}", mapping={
+        "restaurant_key": restaurant_key,
+        "courier_id": courier_id,
+        "reward_eur": reward_eur,
+        "status": "completed",
+        "ts": time.time(),
+    })
+    print(f"[MANAGER] ✅ Commande {order_id} enregistrée pour facturation.")
+
+def calculer_gains(r):
+    """Calcule les gains totaux des restaurants et des livreurs."""
+    restaurants_gains = {}
+    livreurs_gains = {}
+
+    for key in r.scan_iter("order:*"):
+        order_data = r.hgetall(key)
+        if order_data.get("status") != "completed":
+            continue
+
+        restaurant_key = order_data.get("restaurant_key")
+        courier_id = order_data.get("courier_id")
+        reward_eur = float(order_data.get("reward_eur", 0))
+
+        # Calcul des gains restaurant
+        if restaurant_key in restaurants_gains:
+            restaurants_gains[restaurant_key] += reward_eur
+        else:
+            restaurants_gains[restaurant_key] = reward_eur
+
+        # Calcul des gains livreur
+        if courier_id in livreurs_gains:
+            livreurs_gains[courier_id] += reward_eur
+        else:
+            livreurs_gains[courier_id] = reward_eur
+
+    # Affichage des résultats
+    print("\n=== Gains des restaurants ===")
+    for restaurant_key, total in restaurants_gains.items():
+        print(f"Restaurant {restaurant_key}: {total:.2f} €")
+
+    print("\n=== Gains des livreurs ===")
+    for courier_id, total in livreurs_gains.items():
+        print(f"Livreur {courier_id}: {total:.2f} €")
+
+def fin_de_journee():
+    r = get_redis()
+    calculer_gains(r)
 
 def listen_loop():
     r = get_redis()
     print(f"[MANAGER] Connecté à {REDIS_URL}")
-    p = r.pubsub(); p.subscribe(CHAN_COMMANDES)
+    p = r.pubsub()
+    p.subscribe(CHAN_COMMANDES)
     print(f"[MANAGER] 👂 En attente de commandes client sur '{CHAN_COMMANDES}'…")
     try:
         for msg in p.listen():
@@ -128,6 +188,9 @@ def listen_loop():
             handle_commande(r, cmd)
     finally:
         p.close()
+
+    # Appel à la fin de la journée
+    fin_de_journee()  # Cette ligne va afficher les gains dans la CLI
 
 if __name__ == "__main__":
     listen_loop()

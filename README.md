@@ -21,6 +21,7 @@ graph TD
     F[Livreur N] <-->|Candidature/Affectation| B
     C -->|Stockage| G[(MongoDB)]
     C -->|Cache| H[(Redis)]
+
 ## 🚀 Fonctionnalités
 
 - ✅ **Système client** : Interface en ligne de commande pour passer des commandes
